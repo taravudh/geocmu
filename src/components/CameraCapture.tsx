@@ -35,6 +35,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const cleanupRef = useRef<boolean>(false);
 
   // Detect mobile device
   useEffect(() => {
@@ -51,6 +52,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
   useEffect(() => {
     if (isOpen) {
       console.log('Camera modal opened, initializing...');
+      cleanupRef.current = false;
       setError(null);
       setVideoReady(false);
       setVideoLoaded(false);
@@ -59,23 +61,31 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
 
       // Small delay to ensure DOM is ready
       setTimeout(() => {
-        initializeCamera();
+        if (!cleanupRef.current) {
+          initializeCamera();
+        }
       }, 100);
     } else {
       console.log('Camera modal closed, cleaning up...');
+      cleanupRef.current = true;
       cleanup();
     }
 
-    return () => cleanup();
+    return () => {
+      cleanupRef.current = true;
+      cleanup();
+    };
   }, [isOpen]);
 
   // Handle facing mode changes
   useEffect(() => {
-    if (isOpen && stream && videoLoaded) {
+    if (isOpen && stream && videoLoaded && !cleanupRef.current) {
       console.log('Facing mode changed, restarting camera...');
       cleanup();
       setTimeout(() => {
-        initializeCamera();
+        if (!cleanupRef.current) {
+          initializeCamera();
+        }
       }, 500);
     }
   }, [facingMode]);
@@ -118,41 +128,75 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
   const cleanup = useCallback(() => {
     console.log('Cleaning up camera resources...');
 
-    // Stop all tracks
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => {
-        track.stop();
-        console.log('Camera track stopped:', track.kind, track.readyState);
-      });
-      streamRef.current = null;
+    try {
+      // Stop all tracks
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => {
+          try {
+            track.stop();
+            console.log('Camera track stopped:', track.kind, track.readyState);
+          } catch (trackError) {
+            console.warn('Error stopping track:', trackError);
+          }
+        });
+        streamRef.current = null;
+      }
+
+      if (stream) {
+        stream.getTracks().forEach(track => {
+          try {
+            track.stop();
+          } catch (trackError) {
+            console.warn('Error stopping stream track:', trackError);
+          }
+        });
+        setStream(null);
+      }
+
+      // Reset video element safely
+      if (videoRef.current) {
+        try {
+          const video = videoRef.current;
+
+          // Remove all event listeners by cloning the element
+          const newVideo = video.cloneNode(true) as HTMLVideoElement;
+
+          // Clear the old video
+          video.pause();
+          video.srcObject = null;
+          video.src = '';
+
+          // Replace only if parent exists and video is still a child
+          if (video.parentNode && video.parentNode.contains(video)) {
+            try {
+              video.parentNode.replaceChild(newVideo, video);
+              // Update the ref to point to the new video element
+              (videoRef as any).current = newVideo;
+            } catch (replaceError) {
+              console.warn('Could not replace video element:', replaceError);
+              // Fallback: just clear the existing video
+              video.load();
+            }
+          }
+        } catch (videoError) {
+          console.warn('Error cleaning up video element:', videoError);
+        }
+      }
+
+      setVideoReady(false);
+      setVideoLoaded(false);
+      setIsInitializing(false);
+    } catch (cleanupError) {
+      console.warn('Error during cleanup:', cleanupError);
     }
-
-    if (stream) {
-      stream.getTracks().forEach(track => {
-        track.stop();
-      });
-      setStream(null);
-    }
-
-    // Reset video element completely
-    if (videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.srcObject = null;
-      videoRef.current.src = '';
-      videoRef.current.load();
-
-      // Remove all event listeners
-      const video = videoRef.current;
-      const newVideo = video.cloneNode(true) as HTMLVideoElement;
-      video.parentNode?.replaceChild(newVideo, video);
-    }
-
-    setVideoReady(false);
-    setVideoLoaded(false);
-    setIsInitializing(false);
   }, [stream]);
 
   const initializeCamera = async () => {
+    if (cleanupRef.current) {
+      console.log('Cleanup flag set, aborting camera initialization');
+      return;
+    }
+
     console.log('Starting camera initialization...');
     setIsInitializing(true);
     setError(null);
@@ -177,6 +221,13 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
 
       // Request camera access
       const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      if (cleanupRef.current) {
+        // If cleanup was called during async operation, stop the stream
+        mediaStream.getTracks().forEach(track => track.stop());
+        return;
+      }
+
       console.log('Camera stream obtained successfully');
       console.log('Stream tracks:', mediaStream.getTracks().map(t => ({
         kind: t.kind,
@@ -193,10 +244,14 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
       await setupVideoElement(mediaStream);
 
     } catch (err) {
-      console.error('Camera initialization failed:', err);
-      handleCameraError(err);
+      if (!cleanupRef.current) {
+        console.error('Camera initialization failed:', err);
+        handleCameraError(err);
+      }
     } finally {
-      setIsInitializing(false);
+      if (!cleanupRef.current) {
+        setIsInitializing(false);
+      }
     }
   };
 
@@ -253,6 +308,11 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
 
   const setupVideoElement = async (mediaStream: MediaStream): Promise<void> => {
     return new Promise((resolve, reject) => {
+      if (cleanupRef.current) {
+        reject(new Error('Setup cancelled due to cleanup'));
+        return;
+      }
+
       const video = videoRef.current;
 
       if (!video) {
@@ -264,7 +324,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
 
       let resolved = false;
       const timeoutId = setTimeout(() => {
-        if (!resolved) {
+        if (!resolved && !cleanupRef.current) {
           console.error('Video setup timeout after 15 seconds');
           reject(new Error('Video setup timeout - camera may be in use by another app'));
         }
@@ -272,15 +332,19 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
 
       const cleanup = () => {
         clearTimeout(timeoutId);
-        video.removeEventListener('loadedmetadata', onLoadedMetadata);
-        video.removeEventListener('canplay', onCanPlay);
-        video.removeEventListener('playing', onPlaying);
-        video.removeEventListener('error', onError);
-        video.removeEventListener('loadstart', onLoadStart);
+        try {
+          video.removeEventListener('loadedmetadata', onLoadedMetadata);
+          video.removeEventListener('canplay', onCanPlay);
+          video.removeEventListener('playing', onPlaying);
+          video.removeEventListener('error', onError);
+          video.removeEventListener('loadstart', onLoadStart);
+        } catch (listenerError) {
+          console.warn('Error removing event listeners:', listenerError);
+        }
       };
 
       const resolveOnce = () => {
-        if (!resolved) {
+        if (!resolved && !cleanupRef.current) {
           resolved = true;
           cleanup();
           resolve();
@@ -288,7 +352,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
       };
 
       const rejectOnce = (error: Error) => {
-        if (!resolved) {
+        if (!resolved && !cleanupRef.current) {
           resolved = true;
           cleanup();
           reject(error);
@@ -296,6 +360,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
       };
 
       const onLoadedMetadata = () => {
+        if (cleanupRef.current) return;
         console.log('Video metadata loaded:', {
           videoWidth: video.videoWidth,
           videoHeight: video.videoHeight,
@@ -305,6 +370,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
       };
 
       const onCanPlay = () => {
+        if (cleanupRef.current) return;
         console.log('Video can play');
         if (video.videoWidth > 0 && video.videoHeight > 0) {
           setVideoReady(true);
@@ -313,6 +379,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
       };
 
       const onPlaying = () => {
+        if (cleanupRef.current) return;
         console.log('Video is playing');
         setVideoReady(true);
         if (video.videoWidth > 0 && video.videoHeight > 0) {
@@ -321,6 +388,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
       };
 
       const onError = (event: Event) => {
+        if (cleanupRef.current) return;
         console.error('Video element error:', event);
         const videoError = (event.target as HTMLVideoElement)?.error;
         if (videoError) {
@@ -333,36 +401,46 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
       };
 
       const onLoadStart = () => {
+        if (cleanupRef.current) return;
         console.log('Video load started');
       };
 
-      // Add event listeners
-      video.addEventListener('loadedmetadata', onLoadedMetadata);
-      video.addEventListener('canplay', onCanPlay);
-      video.addEventListener('playing', onPlaying);
-      video.addEventListener('error', onError);
-      video.addEventListener('loadstart', onLoadStart);
+      try {
+        // Add event listeners
+        video.addEventListener('loadedmetadata', onLoadedMetadata);
+        video.addEventListener('canplay', onCanPlay);
+        video.addEventListener('playing', onPlaying);
+        video.addEventListener('error', onError);
+        video.addEventListener('loadstart', onLoadStart);
 
-      // Configure video element for mobile compatibility
-      video.playsInline = true;
-      video.muted = true;
-      video.autoplay = true;
-      video.controls = false;
+        // Configure video element for mobile compatibility
+        video.playsInline = true;
+        video.muted = true;
+        video.autoplay = true;
+        video.controls = false;
 
-      // Set the stream
-      console.log('Assigning stream to video element...');
-      video.srcObject = mediaStream;
+        // Set the stream
+        console.log('Assigning stream to video element...');
+        video.srcObject = mediaStream;
 
-      // Force load and play
-      video.load();
-      video.play().catch(playError => {
-        console.error('Video play error:', playError);
-        rejectOnce(new Error('Failed to start video playback: ' + playError.message));
-      });
+        // Force load and play
+        video.load();
+        video.play().catch(playError => {
+          if (!cleanupRef.current) {
+            console.error('Video play error:', playError);
+            rejectOnce(new Error('Failed to start video playback: ' + playError.message));
+          }
+        });
+      } catch (setupError) {
+        console.error('Error setting up video element:', setupError);
+        rejectOnce(new Error('Failed to setup video element: ' + (setupError as Error).message));
+      }
     });
   };
 
   const handleCameraError = (err: any) => {
+    if (cleanupRef.current) return;
+
     console.error('Camera error details:', err);
 
     let errorMessage = 'Camera error occurred. ';
@@ -395,7 +473,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
           if (err.message.includes('timeout')) {
             errorMessage = 'Camera took too long to start. This may happen if the camera is in use by another app.';
             canRetry = true;
-          } else if (err.message.includes('Video element')) {
+          } else if (err.message.includes('Video element') || err.message.includes('DOM')) {
             errorMessage = 'Camera display error. Please refresh the page and try again.';
             canRetry = true;
           } else {
@@ -408,17 +486,19 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
     setError(errorMessage);
 
     // Auto-retry with simpler constraints
-    if (canRetry && retryCount < 4) {
+    if (canRetry && retryCount < 4 && !cleanupRef.current) {
       console.log(`Auto-retrying with simpler constraints (attempt ${retryCount + 1}/4)`);
       setRetryCount(prev => prev + 1);
       setTimeout(() => {
-        initializeCamera();
+        if (!cleanupRef.current) {
+          initializeCamera();
+        }
       }, 2000);
     }
   };
 
   const capturePhoto = () => {
-    if (!videoRef.current || !canvasRef.current || !videoReady || !videoLoaded) {
+    if (!videoRef.current || !canvasRef.current || !videoReady || !videoLoaded || cleanupRef.current) {
       setError('Camera not ready for capture. Please wait for camera to load completely.');
       return;
     }
@@ -507,17 +587,21 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
   };
 
   const switchCamera = () => {
+    if (cleanupRef.current) return;
     console.log('Switching camera from', facingMode, 'to', facingMode === 'user' ? 'environment' : 'user');
     setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
   };
 
   const forceRetry = () => {
+    if (cleanupRef.current) return;
     console.log('Force retry requested');
     setRetryCount(0);
     setError(null);
     cleanup();
     setTimeout(() => {
-      initializeCamera();
+      if (!cleanupRef.current) {
+        initializeCamera();
+      }
     }, 1000);
   };
 
@@ -600,7 +684,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
             </p>
 
             <div className="mb-6 p-4 bg-blue-900/50 rounded-lg border border-blue-600">
-              <h4 className="font-semibold text-blue-400 mb-3">🔧 Troubleshooting:</h4>
+              <h4 className="font-semibold text-blue-400 mb-3">🔧 Quick Fix:</h4>
               <div className="text-left text-sm text-blue-200 space-y-2">
                 <div className="flex items-start space-x-2">
                   <span className="text-blue-400 font-bold">1.</span>
