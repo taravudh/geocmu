@@ -1,17 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Camera, RotateCcw, Check, Download, MapPin } from 'lucide-react';
+import { X, Camera, RotateCcw, Check, Download, MapPin, AlertCircle, Settings } from 'lucide-react';
 
 interface CameraCaptureProps {
   isOpen: boolean;
   onClose: () => void;
-  onPhotoTaken: (photoData: { 
-    imageUrl: string; 
-    timestamp: number; 
+  onPhotoTaken: (photoData: {
+    imageUrl: string;
+    timestamp: number;
     location?: { lat: number; lng: number; accuracy: number };
     featureId?: string;
   }) => void;
   currentLocation?: { lat: number; lng: number; accuracy: number } | null;
-  selectedFeatureId?: string | null; // NEW: Pass the selected feature ID
+  selectedFeatureId?: string | null;
 }
 
 const CameraCapture: React.FC<CameraCaptureProps> = ({
@@ -27,7 +27,9 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState(false);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
-  
+  const [isInitializing, setIsInitializing] = useState(false);
+  const [hasTriedBasic, setHasTriedBasic] = useState(false);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -36,7 +38,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 768 || 'ontouchstart' in window);
     };
-    
+
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
@@ -45,6 +47,8 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
   // Initialize camera when modal opens
   useEffect(() => {
     if (isOpen) {
+      setError(null);
+      setHasTriedBasic(false);
       initializeCamera();
     } else {
       cleanup();
@@ -56,20 +60,18 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
   // Generate filename using Feature ID or fallback to timestamp
   const generatePhotoFilename = (): string => {
     if (selectedFeatureId) {
-      // Use feature ID as filename
       return `${selectedFeatureId}.jpg`;
     } else {
-      // Fallback to Thai time if no feature selected
       const now = new Date();
       const thaiTime = new Date(now.getTime() + (7 * 60 * 60 * 1000));
-      
+
       const year = thaiTime.getUTCFullYear();
       const month = String(thaiTime.getUTCMonth() + 1).padStart(2, '0');
       const day = String(thaiTime.getUTCDate()).padStart(2, '0');
       const hours = String(thaiTime.getUTCHours()).padStart(2, '0');
       const minutes = String(thaiTime.getUTCMinutes()).padStart(2, '0');
       const seconds = String(thaiTime.getUTCSeconds()).padStart(2, '0');
-      
+
       return `field-photo-${year}-${month}-${day}_${hours}-${minutes}-${seconds}.jpg`;
     }
   };
@@ -77,7 +79,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
   // Get Thai local time display string
   const getThaiTimeDisplay = (): string => {
     const now = new Date();
-    
+
     return now.toLocaleString('th-TH', {
       timeZone: 'Asia/Bangkok',
       year: 'numeric',
@@ -91,82 +93,226 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
   };
 
   const initializeCamera = async () => {
+    setIsInitializing(true);
+    setError(null);
+
     try {
-      setError(null);
-      
+      // Check if camera API is available
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Camera not supported on this device');
+        throw new Error('UNSUPPORTED');
       }
 
-      const constraints: MediaStreamConstraints = {
-        video: {
-          facingMode: facingMode,
-          width: { ideal: isMobile ? 1280 : 1920 },
-          height: { ideal: isMobile ? 720 : 1080 },
-        },
+      // Try advanced constraints first
+      if (!hasTriedBasic) {
+        await tryAdvancedConstraints();
+      } else {
+        await tryBasicConstraints();
+      }
+
+    } catch (err) {
+      console.error('Camera initialization error:', err);
+      handleCameraError(err);
+    } finally {
+      setIsInitializing(false);
+    }
+  };
+
+  const tryAdvancedConstraints = async () => {
+    const constraints: MediaStreamConstraints = {
+      video: {
+        facingMode: { ideal: facingMode },
+        width: { ideal: isMobile ? 1280 : 1920, min: 320 },
+        height: { ideal: isMobile ? 720 : 1080, min: 240 },
+        frameRate: { ideal: 30, min: 10 }
+      },
+      audio: false
+    };
+
+    console.log('Trying advanced camera constraints:', constraints);
+
+    try {
+      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      await setupVideoStream(mediaStream);
+    } catch (error) {
+      console.log('Advanced constraints failed, trying basic...');
+      setHasTriedBasic(true);
+      await tryBasicConstraints();
+    }
+  };
+
+  const tryBasicConstraints = async () => {
+    const basicConstraints: MediaStreamConstraints = {
+      video: {
+        facingMode: facingMode
+      },
+      audio: false
+    };
+
+    console.log('Trying basic camera constraints:', basicConstraints);
+
+    try {
+      const mediaStream = await navigator.mediaDevices.getUserMedia(basicConstraints);
+      await setupVideoStream(mediaStream);
+    } catch (error) {
+      // Try the most basic constraints
+      console.log('Basic constraints failed, trying minimal...');
+      const minimalConstraints: MediaStreamConstraints = {
+        video: true,
         audio: false
       };
 
-      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      const mediaStream = await navigator.mediaDevices.getUserMedia(minimalConstraints);
+      await setupVideoStream(mediaStream);
+    }
+  };
+
+  const setupVideoStream = async (mediaStream: MediaStream): Promise<void> => {
+    return new Promise((resolve, reject) => {
       setStream(mediaStream);
 
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
-        videoRef.current.play();
+
+        const handleLoadedMetadata = () => {
+          if (videoRef.current) {
+            videoRef.current.play()
+              .then(() => {
+                console.log('Camera started successfully');
+                setError(null);
+                resolve();
+              })
+              .catch((playError) => {
+                console.error('Error playing video:', playError);
+                reject(new Error('PLAY_FAILED'));
+              });
+          }
+        };
+
+        const handleError = (videoError: Event) => {
+          console.error('Video error:', videoError);
+          reject(new Error('VIDEO_ERROR'));
+        };
+
+        videoRef.current.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
+        videoRef.current.addEventListener('error', handleError, { once: true });
+
+        // Timeout fallback
+        setTimeout(() => {
+          if (videoRef.current && videoRef.current.readyState === 0) {
+            reject(new Error('TIMEOUT'));
+          }
+        }, 10000);
+      } else {
+        reject(new Error('NO_VIDEO_ELEMENT'));
       }
-    } catch (err) {
-      console.error('Camera initialization error:', err);
-      let errorMessage = 'Failed to access camera. ';
-      
-      if (err instanceof Error) {
-        if (err.name === 'NotAllowedError') {
-          errorMessage += 'Please allow camera permissions in your browser settings.';
-        } else if (err.name === 'NotFoundError') {
-          errorMessage += 'No camera found on this device.';
-        } else if (err.name === 'NotSupportedError') {
-          errorMessage += 'Camera not supported on this device.';
-        } else {
-          errorMessage += err.message;
-        }
+    });
+  };
+
+  const handleCameraError = (err: any) => {
+    let errorMessage = 'Failed to access camera. ';
+    let showInstructions = false;
+
+    if (err instanceof Error) {
+      switch (err.message) {
+        case 'UNSUPPORTED':
+          errorMessage = 'Camera not supported on this device or browser.';
+          break;
+        case 'PLAY_FAILED':
+          errorMessage = 'Camera preview failed to start. Please try again.';
+          break;
+        case 'VIDEO_ERROR':
+          errorMessage = 'Video stream error. Please check camera permissions.';
+          showInstructions = true;
+          break;
+        case 'TIMEOUT':
+          errorMessage = 'Camera took too long to start. Please try again.';
+          break;
+        default:
+          switch (err.name) {
+            case 'NotAllowedError':
+              errorMessage = 'Camera access denied. Please allow camera permissions.';
+              showInstructions = true;
+              break;
+            case 'NotFoundError':
+              errorMessage = 'No camera found on this device.';
+              break;
+            case 'NotSupportedError':
+              errorMessage = 'Camera not supported on this device.';
+              break;
+            case 'NotReadableError':
+              errorMessage = 'Camera is already in use by another application.';
+              break;
+            case 'OverconstrainedError':
+              errorMessage = 'Camera settings not supported. Trying simpler settings...';
+              if (!hasTriedBasic) {
+                setHasTriedBasic(true);
+                setTimeout(() => initializeCamera(), 1000);
+                return;
+              }
+              break;
+            default:
+              errorMessage += err.message;
+          }
       }
-      
-      setError(errorMessage);
     }
+
+    setError(errorMessage);
   };
 
   const cleanup = () => {
     if (stream) {
-      stream.getTracks().forEach(track => track.stop());
+      stream.getTracks().forEach(track => {
+        track.stop();
+        console.log('Camera track stopped');
+      });
       setStream(null);
     }
     setCapturedImage(null);
     setError(null);
+    setIsInitializing(false);
+    setHasTriedBasic(false);
   };
 
   const capturePhoto = () => {
-    if (!videoRef.current || !canvasRef.current) return;
+    if (!videoRef.current || !canvasRef.current) {
+      setError('Camera not ready for capture');
+      return;
+    }
 
     setIsCapturing(true);
-    
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const context = canvas.getContext('2d');
 
-    if (!context) return;
+    try {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      const context = canvas.getContext('2d');
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+      if (!context) {
+        throw new Error('Unable to get canvas context');
+      }
 
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      // Set canvas dimensions to match video
+      canvas.width = video.videoWidth || video.clientWidth || 640;
+      canvas.height = video.videoHeight || video.clientHeight || 480;
 
-    const imageDataUrl = canvas.toDataURL('image/jpeg', 0.8);
-    setCapturedImage(imageDataUrl);
-    
+      // Draw the video frame to canvas
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Convert to image data
+      const imageDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+      setCapturedImage(imageDataUrl);
+
+      console.log('Photo captured successfully');
+    } catch (captureError) {
+      console.error('Photo capture error:', captureError);
+      setError('Failed to capture photo. Please try again.');
+    }
+
     setTimeout(() => setIsCapturing(false), 200);
   };
 
   const retakePhoto = () => {
     setCapturedImage(null);
+    setError(null);
   };
 
   const savePhoto = () => {
@@ -186,14 +332,38 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
   const downloadPhoto = () => {
     if (!capturedImage) return;
 
-    const link = document.createElement('a');
-    link.download = generatePhotoFilename(); // Use feature ID or Thai time
-    link.href = capturedImage;
-    link.click();
+    try {
+      const link = document.createElement('a');
+      link.download = generatePhotoFilename();
+      link.href = capturedImage;
+      link.click();
+    } catch (downloadError) {
+      console.error('Download error:', downloadError);
+      setError('Failed to download photo');
+    }
   };
 
   const switchCamera = () => {
     setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
+  };
+
+  const openBrowserSettings = () => {
+    // Show instructions for enabling camera permissions
+    const instructions = `
+To enable camera permissions:
+
+1. Look for the camera icon 🎥 or lock icon 🔒 in your browser's address bar
+2. Click on it and select "Allow" for camera
+3. Or go to your browser settings:
+   - Chrome: Settings > Privacy > Site Settings > Camera
+   - Safari: Settings > Websites > Camera
+   - Firefox: Settings > Privacy > Permissions > Camera
+4. Refresh this page and try again
+
+Current URL: ${window.location.href}
+    `;
+
+    alert(instructions);
   };
 
   if (!isOpen) return null;
@@ -211,7 +381,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
           >
             <X className={`${isMobile ? 'h-6 w-6' : 'h-5 w-5'} text-white`} />
           </button>
-          
+
           <div className="text-center">
             <h2 className={`font-bold text-white ${isMobile ? 'text-lg' : 'text-xl'}`}>
               📸 Field Camera
@@ -231,7 +401,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
             )}
           </div>
 
-          {!capturedImage && (
+          {!capturedImage && stream && (
             <button
               onClick={switchCamera}
               className={`p-2 bg-white/20 hover:bg-white/30 rounded-full transition-colors duration-200 ${
@@ -247,17 +417,71 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
 
       {/* Camera View */}
       <div className="relative w-full h-full flex items-center justify-center">
-        {error ? (
+        {isInitializing ? (
           <div className="text-center text-white p-6">
-            <div className="text-6xl mb-4">📷</div>
-            <h3 className={`font-bold mb-2 ${isMobile ? 'text-lg' : 'text-xl'}`}>Camera Error</h3>
-            <p className={`text-gray-300 mb-4 ${isMobile ? 'text-sm' : 'text-base'}`}>{error}</p>
-            <button
-              onClick={initializeCamera}
-              className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-200"
-            >
-              Try Again
-            </button>
+            <div className="animate-spin rounded-full h-16 w-16 border-4 border-white border-t-transparent mx-auto mb-4"></div>
+            <h3 className={`font-bold mb-2 ${isMobile ? 'text-lg' : 'text-xl'}`}>Starting Camera...</h3>
+            <p className={`text-gray-300 ${isMobile ? 'text-sm' : 'text-base'}`}>
+              Please allow camera permissions when prompted
+            </p>
+          </div>
+        ) : error ? (
+          <div className="text-center text-white p-6 max-w-md mx-4">
+            <AlertCircle className="h-16 w-16 mx-auto mb-4 text-red-400" />
+            <h3 className={`font-bold mb-4 ${isMobile ? 'text-lg' : 'text-xl'}`}>Camera Error</h3>
+            <p className={`text-gray-300 mb-6 ${isMobile ? 'text-sm' : 'text-base'} leading-relaxed`}>
+              {error}
+            </p>
+
+            <div className="mb-6 p-4 bg-blue-900/50 rounded-lg border border-blue-600">
+              <h4 className="font-semibold text-blue-400 mb-3">📱 How to enable camera:</h4>
+              <div className="text-left text-sm text-blue-200 space-y-2">
+                <div className="flex items-start space-x-2">
+                  <span className="text-blue-400 font-bold">1.</span>
+                  <span>Look for the camera 🎥 or lock 🔒 icon in your browser's address bar</span>
+                </div>
+                <div className="flex items-start space-x-2">
+                  <span className="text-blue-400 font-bold">2.</span>
+                  <span>Tap it and select "Allow" for camera permissions</span>
+                </div>
+                <div className="flex items-start space-x-2">
+                  <span className="text-blue-400 font-bold">3.</span>
+                  <span>If no icon appears, check your browser settings</span>
+                </div>
+                <div className="flex items-start space-x-2">
+                  <span className="text-blue-400 font-bold">4.</span>
+                  <span>Refresh the page and try again</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <button
+                onClick={() => {
+                  setError(null);
+                  setHasTriedBasic(false);
+                  initializeCamera();
+                }}
+                className="w-full bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-200"
+              >
+                Try Again
+              </button>
+
+              <button
+                onClick={openBrowserSettings}
+                className="w-full bg-yellow-600 hover:bg-yellow-700 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-200 flex items-center justify-center space-x-2"
+              >
+                <Settings className="h-5 w-5" />
+                <span>Camera Settings Help</span>
+              </button>
+
+              <button
+                onClick={onClose}
+                className="w-full bg-gray-600 hover:bg-gray-700 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-200"
+              >
+                Close Camera
+              </button>
+            </div>
           </div>
         ) : capturedImage ? (
           <div className="relative w-full h-full">
@@ -266,7 +490,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
               alt="Captured"
               className="w-full h-full object-cover"
             />
-            
+
             {/* Photo Controls */}
             <div className="absolute bottom-0 left-0 right-0 bg-black/50 backdrop-blur-sm p-4">
               <div className="flex items-center justify-center space-x-4">
@@ -326,8 +550,9 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
               className="w-full h-full object-cover"
               playsInline
               muted
+              autoPlay
             />
-            
+
             {/* Capture Animation Overlay */}
             {isCapturing && (
               <div className="absolute inset-0 bg-white opacity-50 animate-pulse"></div>
