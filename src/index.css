@@ -1,0 +1,317 @@
+@charset "UTF-8";
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@100;200;300;400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Global font family optimized for mobile */
+  * {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif !important;
+    -webkit-font-feature-settings: "liga" 1, "kern" 1;
+    font-feature-settings: "liga" 1, "kern" 1;
+    -webkit-tap-highlight-color: transparent; /* Remove tap highlight on mobile */
+  }
+  
+  html {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+    -webkit-text-size-adjust: 100%;
+    -moz-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    /* Prevent zoom on input focus on iOS */
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -khtml-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+  }
+  
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    line-height: 1.6;
+    font-variant-ligatures: common-ligatures;
+    /* Prevent overscroll bounce on iOS */
+    overscroll-behavior: none;
+    /* Prevent pull-to-refresh on mobile */
+    overscroll-behavior-y: contain;
+  }
+  
+  /* Mobile-specific optimizations */
+  @media (max-width: 768px) {
+    html {
+      /* Prevent zoom on input focus */
+      font-size: 16px;
+    }
+    
+    body {
+      /* Improve touch scrolling */
+      -webkit-overflow-scrolling: touch;
+      /* Prevent text selection on mobile */
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    
+    /* Allow text selection only in specific elements */
+    input, textarea, [contenteditable] {
+      -webkit-user-select: text;
+      user-select: text;
+    }
+  }
+  
+  /* Fix for all input elements */
+  input, textarea, select, button {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+    line-height: 1.6;
+    /* Prevent zoom on focus on iOS */
+    font-size: 16px;
+  }
+  
+  /* Mobile button optimizations */
+  button, [role="button"] {
+    /* Improve touch targets */
+    min-height: 44px;
+    min-width: 44px;
+    /* Remove default button styles */
+    -webkit-appearance: none;
+    appearance: none;
+    /* Improve touch feedback */
+    cursor: pointer;
+    /* Prevent text selection */
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  
+  @media (max-width: 768px) {
+    button, [role="button"] {
+      /* Larger touch targets on mobile */
+      min-height: 48px;
+      min-width: 48px;
+    }
+  }
+}
+
+/* Custom tooltip styling for mobile */
+.custom-attribute-tooltip {
+  background: rgba(255, 255, 255, 0.98) !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 12px !important;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15) !important;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+  font-size: 14px !important;
+  line-height: 1.4 !important;
+  max-width: 300px !important;
+  padding: 0 !important;
+  backdrop-filter: blur(8px) !important;
+}
+
+@media (max-width: 768px) {
+  .custom-attribute-tooltip {
+    font-size: 16px !important; /* Prevent zoom on iOS */
+    max-width: 280px !important;
+  }
+}
+
+/* Enhanced hover effects for features */
+.leaflet-interactive:hover {
+  transition: all 0.2s ease !important;
+}
+
+/* GPS Position Marker Styling */
+.gps-position-marker {
+  background: transparent !important;
+  border: none !important;
+}
+
+.gps-position-marker .leaflet-div-icon {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* GPS Accuracy Circle Animation */
+@keyframes gps-pulse {
+  0% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(1.1);
+  }
+  100% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+}
+
+/* Info popup styling with mobile optimizations */
+.info-popup .leaflet-popup-content-wrapper {
+  background: rgba(255, 255, 255, 0.98) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15) !important;
+  backdrop-filter: blur(10px) !important;
+  min-width: 200px !important;
+}
+
+@media (max-width: 768px) {
+  .info-popup .leaflet-popup-content-wrapper {
+    min-width: 250px !important;
+    font-size: 16px !important; /* Prevent zoom on iOS */
+  }
+}
+
+.info-popup .leaflet-popup-tip {
+  background: rgba(255, 255, 255, 0.98) !important;
+}
+
+/* Measurement marker styling */
+.measurement-marker {
+  background: transparent !important;
+  border: none !important;
+}
+
+.measurement-marker .leaflet-div-icon {
+  background: transparent !important;
+  border: none !important;
+}
+
+.measurement-label {
+  background: transparent !important;
+  border: none !important;
+}
+
+.measurement-label .leaflet-div-icon {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* Mobile-specific Leaflet map optimizations */
+@media (max-width: 768px) {
+  .leaflet-container {
+    /* Improve touch interactions */
+    touch-action: pan-x pan-y;
+  }
+  
+  .leaflet-control-container {
+    /* Hide default controls on mobile */
+    display: none;
+  }
+  
+  .leaflet-popup-content {
+    /* Improve readability on mobile */
+    font-size: 16px !important;
+    line-height: 1.5 !important;
+    margin: 16px 20px !important;
+  }
+  
+  .leaflet-popup-content-wrapper {
+    /* Better mobile popup sizing */
+    max-width: calc(100vw - 40px) !important;
+  }
+}
+
+/* Smooth scrolling for mobile panels */
+.mobile-panel {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* Prevent text selection on interactive elements */
+.no-select {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+/* Allow text selection on content elements */
+.allow-select {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
+}
+
+/* Mobile-friendly focus styles */
+@media (max-width: 768px) {
+  button:focus,
+  input:focus,
+  textarea:focus,
+  select:focus {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+  }
+}
+
+/* Improve touch feedback */
+.touch-feedback {
+  transition: all 0.1s ease;
+}
+
+.touch-feedback:active {
+  transform: scale(0.98);
+  opacity: 0.8;
+}
+
+/* Safe area insets for devices with notches */
+@supports (padding: max(0px)) {
+  .safe-area-top {
+    padding-top: max(16px, env(safe-area-inset-top));
+  }
+  
+  .safe-area-bottom {
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  
+  .safe-area-left {
+    padding-left: max(16px, env(safe-area-inset-left));
+  }
+  
+  .safe-area-right {
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+}
+
+/* Prevent zoom on input focus (iOS Safari) */
+@media screen and (max-width: 768px) {
+  input[type="text"],
+  input[type="email"],
+  input[type="number"],
+  input[type="tel"],
+  input[type="url"],
+  input[type="password"],
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* Loading spinner optimizations */
+.loading-spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Backdrop blur fallback for older browsers */
+@supports not (backdrop-filter: blur(10px)) {
+  .backdrop-blur-md {
+    background-color: rgba(255, 255, 255, 0.9) !important;
+  }
+  
+  .backdrop-blur-sm {
+    background-color: rgba(0, 0, 0, 0.8) !important;
+  }
+}
