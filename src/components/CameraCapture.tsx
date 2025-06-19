@@ -30,12 +30,14 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
   const [isInitializing, setIsInitializing] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
-  const [videoKey, setVideoKey] = useState(0); // Force video element recreation
+  const [videoKey, setVideoKey] = useState(0);
+  const [initProgress, setInitProgress] = useState('Requesting camera access...');
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const mountedRef = useRef<boolean>(true);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Detect mobile device
   useEffect(() => {
@@ -53,6 +55,9 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
     };
   }, []);
 
@@ -66,6 +71,11 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
   // Complete cleanup function
   const cleanup = useCallback(() => {
     console.log('🧹 Starting camera cleanup...');
+
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
 
     try {
       // Stop all media tracks
@@ -94,14 +104,14 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
         });
       }
 
-      // Clear video element safely - NO DOM MANIPULATION
+      // Clear video element safely
       if (videoRef.current) {
         const video = videoRef.current;
         try {
           video.pause();
           video.srcObject = null;
           video.src = '';
-          video.load(); // Reset video element
+          video.load();
         } catch (e) {
           console.warn('Video cleanup error:', e);
         }
@@ -113,6 +123,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
         setVideoReady(false);
         setIsInitializing(false);
         setError(null);
+        setInitProgress('Requesting camera access...');
       });
 
     } catch (e) {
@@ -131,14 +142,15 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
       setVideoReady(false);
       setRetryCount(0);
       setCapturedImage(null);
-      setVideoKey(prev => prev + 1); // Force new video element
+      setVideoKey(prev => prev + 1);
+      setInitProgress('Requesting camera access...');
 
-      // Start camera initialization
+      // Start camera initialization with delay
       const timer = setTimeout(() => {
         if (mountedRef.current) {
           initializeCamera();
         }
-      }, 200);
+      }, 300);
 
       return () => {
         clearTimeout(timer);
@@ -154,7 +166,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
     if (isOpen && stream && videoReady && mountedRef.current) {
       console.log('🔄 Camera facing mode changed, reinitializing...');
       cleanup();
-      setVideoKey(prev => prev + 1); // Force new video element
+      setVideoKey(prev => prev + 1);
 
       const timer = setTimeout(() => {
         if (mountedRef.current) {
@@ -203,22 +215,23 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
   // Get camera constraints with progressive fallback
   const getConstraints = () => {
     const constraintLevels = [
-      // Level 0: Ideal settings
+      // Level 0: Mobile-optimized settings
       {
         video: {
-          facingMode: { ideal: facingMode },
-          width: { ideal: isMobile ? 1280 : 1920, min: 320 },
-          height: { ideal: isMobile ? 720 : 1080, min: 240 },
-          frameRate: { ideal: 30, min: 15 }
+          facingMode: { exact: facingMode },
+          width: { ideal: 1280, max: 1920 },
+          height: { ideal: 720, max: 1080 },
+          frameRate: { ideal: 30, max: 60 }
         },
         audio: false
       },
-      // Level 1: Good settings
+      // Level 1: Relaxed exact constraint
       {
         video: {
           facingMode: facingMode,
-          width: { ideal: 1280, min: 320 },
-          height: { ideal: 720, min: 240 }
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 }
         },
         audio: false
       },
@@ -244,10 +257,11 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
     ];
 
     const level = Math.min(retryCount, constraintLevels.length - 1);
+    console.log(`📋 Using constraint level ${level}:`, constraintLevels[level]);
     return constraintLevels[level];
   };
 
-  // Initialize camera
+  // Initialize camera with timeout
   const initializeCamera = async () => {
     if (!mountedRef.current) return;
 
@@ -256,7 +270,16 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
       setIsInitializing(true);
       setError(null);
       setVideoReady(false);
+      setInitProgress('Requesting camera access...');
     });
+
+    // Set overall timeout
+    timeoutRef.current = setTimeout(() => {
+      if (mountedRef.current && isInitializing) {
+        console.log('⏰ Camera initialization timeout');
+        handleCameraError(new Error('Camera initialization timeout. Please try again.'));
+      }
+    }, 15000); // 15 second timeout
 
     try {
       // Check API availability
@@ -264,9 +287,13 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
         throw new Error('Camera API not supported in this browser');
       }
 
+      safeSetState(() => setInitProgress('Checking camera permissions...'));
+
       // Get constraints
       const constraints = getConstraints();
       console.log('📋 Camera constraints:', constraints);
+
+      safeSetState(() => setInitProgress('Starting camera stream...'));
 
       // Request camera access
       const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -281,12 +308,26 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
 
       // Store stream reference
       streamRef.current = mediaStream;
-      safeSetState(() => setStream(mediaStream));
+      safeSetState(() => {
+        setStream(mediaStream);
+        setInitProgress('Setting up video display...');
+      });
 
       // Setup video element
       await setupVideoElement(mediaStream);
 
+      // Clear timeout on success
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+
     } catch (err) {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+
       if (mountedRef.current) {
         console.error('❌ Camera initialization failed:', err);
         handleCameraError(err);
@@ -298,7 +339,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
     }
   };
 
-  // Setup video element
+  // Setup video element with shorter timeout
   const setupVideoElement = async (mediaStream: MediaStream): Promise<void> => {
     return new Promise((resolve, reject) => {
       if (!mountedRef.current) {
@@ -317,15 +358,20 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
       let resolved = false;
       const timeout = setTimeout(() => {
         if (!resolved && mountedRef.current) {
-          reject(new Error('Video setup timeout'));
+          console.log('⏰ Video setup timeout');
+          reject(new Error('Video setup timeout - trying simpler settings'));
         }
-      }, 10000);
+      }, 8000); // Shorter timeout
 
       const resolveOnce = () => {
         if (!resolved && mountedRef.current) {
           resolved = true;
           clearTimeout(timeout);
-          safeSetState(() => setVideoReady(true));
+          console.log('✅ Video ready');
+          safeSetState(() => {
+            setVideoReady(true);
+            setInitProgress('Camera ready!');
+          });
           resolve();
         }
       };
@@ -338,47 +384,71 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
         }
       };
 
-      // Event handlers
-      const onLoadedMetadata = () => {
-        if (!mountedRef.current) return;
-        console.log('📊 Video metadata loaded');
-        if (video.videoWidth > 0 && video.videoHeight > 0) {
-          resolveOnce();
-        }
-      };
-
-      const onCanPlay = () => {
-        if (!mountedRef.current) return;
-        console.log('▶️ Video can play');
-        resolveOnce();
-      };
-
-      const onError = () => {
-        if (!mountedRef.current) return;
-        console.error('❌ Video element error');
-        rejectOnce(new Error('Video element failed to load'));
-      };
-
       try {
-        // Add event listeners
-        video.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
-        video.addEventListener('canplay', onCanPlay, { once: true });
-        video.addEventListener('error', onError, { once: true });
-
-        // Configure video
+        // Configure video first
         video.playsInline = true;
         video.muted = true;
         video.autoplay = true;
+        video.controls = false;
 
-        // Set stream
+        // Event handlers with timeout
+        const onLoadedMetadata = () => {
+          if (!mountedRef.current || resolved) return;
+          console.log('📊 Video metadata loaded');
+          if (video.videoWidth > 0 && video.videoHeight > 0) {
+            resolveOnce();
+          }
+        };
+
+        const onCanPlay = () => {
+          if (!mountedRef.current || resolved) return;
+          console.log('▶️ Video can play');
+          resolveOnce();
+        };
+
+        const onLoadedData = () => {
+          if (!mountedRef.current || resolved) return;
+          console.log('📦 Video data loaded');
+          resolveOnce();
+        };
+
+        const onError = (e: Event) => {
+          if (!mountedRef.current || resolved) return;
+          console.error('❌ Video element error:', e);
+          rejectOnce(new Error('Video element failed to load'));
+        };
+
+        // Add multiple event listeners for better compatibility
+        video.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
+        video.addEventListener('canplay', onCanPlay, { once: true });
+        video.addEventListener('loadeddata', onLoadedData, { once: true });
+        video.addEventListener('error', onError, { once: true });
+
+        // Set stream and start playback
         video.srcObject = mediaStream;
 
-        // Start playback
-        video.play().catch(playError => {
-          if (mountedRef.current) {
-            rejectOnce(new Error('Video play failed: ' + playError.message));
-          }
-        });
+        // Force play with error handling
+        const playPromise = video.play();
+        if (playPromise) {
+          playPromise
+            .then(() => {
+              if (!resolved && mountedRef.current) {
+                console.log('🎬 Video playing');
+                // Give it a moment to load
+                setTimeout(() => {
+                  if (!resolved && mountedRef.current && video.videoWidth > 0) {
+                    resolveOnce();
+                  }
+                }, 1000);
+              }
+            })
+            .catch(playError => {
+              if (!resolved && mountedRef.current) {
+                console.error('Play error:', playError);
+                rejectOnce(new Error('Video play failed: ' + playError.message));
+              }
+            });
+        }
 
       } catch (setupError) {
         rejectOnce(new Error('Video setup failed: ' + (setupError as Error).message));
@@ -386,7 +456,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
     });
   };
 
-  // Handle camera errors
+  // Handle camera errors with better retry logic
   const handleCameraError = (err: any) => {
     if (!mountedRef.current) return;
 
@@ -396,25 +466,34 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
     if (err instanceof Error) {
       switch (err.name) {
         case 'NotAllowedError':
-          errorMessage = 'Camera access denied. Please allow camera permissions and try again.';
+          errorMessage = 'Camera access denied. Please allow camera permissions in your browser settings and refresh the page.';
           break;
         case 'NotFoundError':
-          errorMessage = 'No camera found on this device.';
+          errorMessage = 'No camera found on this device. Please check if your device has a camera.';
           break;
         case 'NotSupportedError':
-          errorMessage = 'Camera not supported on this device.';
+          errorMessage = 'Camera not supported on this device or browser.';
           break;
         case 'NotReadableError':
-          errorMessage = 'Camera is in use by another app. Please close other camera apps and try again.';
+          errorMessage = 'Camera is busy or in use by another app. Please close other camera apps and try again.';
           canRetry = true;
           break;
         case 'OverconstrainedError':
           errorMessage = 'Camera settings not supported. Trying simpler settings...';
           canRetry = true;
           break;
+        case 'AbortError':
+          errorMessage = 'Camera access was interrupted. Please try again.';
+          canRetry = true;
+          break;
         default:
-          errorMessage = err.message || 'Unknown camera error';
-          canRetry = retryCount < 3;
+          if (err.message.includes('timeout')) {
+            errorMessage = 'Camera is taking too long to start. This might be due to slow hardware or browser issues.';
+            canRetry = true;
+          } else {
+            errorMessage = err.message || 'Unknown camera error';
+            canRetry = retryCount < 2;
+          }
       }
     }
 
@@ -603,11 +682,16 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
           <div className="text-center text-white p-6">
             <div className="animate-spin rounded-full h-16 w-16 border-4 border-white border-t-transparent mx-auto mb-4"></div>
             <h3 className={`font-bold mb-2 ${isMobile ? 'text-lg' : 'text-xl'}`}>
-              {retryCount > 0 ? `Retrying Camera... (${retryCount}/4)` : 'Starting Camera...'}
+              {retryCount > 0 ? `Retrying... (${retryCount}/4)` : 'Starting Camera'}
             </h3>
-            <p className={`text-gray-300 ${isMobile ? 'text-sm' : 'text-base'}`}>
-              {retryCount > 0 ? 'Trying simpler camera settings...' : 'Please wait...'}
+            <p className={`text-gray-300 mb-2 ${isMobile ? 'text-sm' : 'text-base'}`}>
+              {initProgress}
             </p>
+            {retryCount > 0 && (
+              <p className={`text-yellow-400 ${isMobile ? 'text-xs' : 'text-sm'}`}>
+                Trying simpler camera settings...
+              </p>
+            )}
           </div>
         ) : error ? (
           <div className="text-center text-white p-6 max-w-md mx-4">
@@ -621,9 +705,9 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
               <h4 className="font-semibold text-blue-400 mb-3">🔧 Quick Fix:</h4>
               <div className="text-left text-sm text-blue-200 space-y-2">
                 <div>1. Close other camera apps</div>
-                <div>2. Check browser permissions</div>
-                <div>3. Try refreshing the page</div>
-                <div>4. Restart browser if needed</div>
+                <div>2. Refresh the page</div>
+                <div>3. Check browser permissions</div>
+                <div>4. Try a different browser</div>
               </div>
             </div>
 
@@ -715,6 +799,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
               playsInline
               muted
               autoPlay
+              controls={false}
               style={{ backgroundColor: '#000' }}
             />
 
@@ -723,7 +808,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({
               <div className="absolute inset-0 bg-black/70 flex items-center justify-center">
                 <div className="text-center text-white">
                   <div className="animate-spin rounded-full h-12 w-12 border-4 border-white border-t-transparent mx-auto mb-3"></div>
-                  <p className="text-sm">Loading camera...</p>
+                  <p className="text-sm">{initProgress}</p>
                 </div>
               </div>
             )}
